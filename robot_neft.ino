@@ -1,8 +1,10 @@
-//v.0.a
+//v.1.a
 //Libraries
 #include <AsyncStream.h>
 #include <GParser.h>
 #include <GyverMotor.h>
+#include <GyverINA.h>
+#include <INA219.h>
 #include <Servo.h>
 
 //Async serial init
@@ -14,9 +16,17 @@ GMotor motorFR(DRIVER3WIRE, 17, 16, 5, HIGH); //Front right
 GMotor motorBL(DRIVER3WIRE, 7, 8, 6, HIGH); //Back left
 GMotor motorBR(DRIVER3WIRE, 4, 2, 3, HIGH); //Back right
 
+//INA219 init
+INA219 platPower;
+
 //Servos init
 Servo platL;
 Servo platR;
+
+//Defining variables
+#define MY_PERIOD 2000  //Serial sending period (ms)
+uint32_t tmr1;         //Timer variable
+bool serial_status = false;
 
 void move_forward(int spd){
   motorFL.setSpeed(spd);
@@ -73,9 +83,14 @@ void setup() {
   motorFR.setMinDuty(150);
   motorBL.setMinDuty(150);
   motorBR.setMinDuty(150);
+  //Starting up INA219
+  platPower.begin();
   //Servos
   platL.attach(9);
   platR.attach(10);
+  //Platform relay
+  pinMode(12, OUTPUT);
+  digitalWrite(12, 1);
 }
 
 void receive() {
@@ -83,9 +98,12 @@ void receive() {
     GParser data(async_bt.buf, '/'); //Parsing data (Separator - '/')
     int am = data.split(); //Splitting data
     /*
-      servo - srv/angle(0...180);
-      movement - move/type(frw,bck,trn_r,trn_l,stop)/speed(0...255);
-      gps coordinates - gps/latitude(широта)/longitude(долгота)
+      start of transmission - start\n
+      end of transmission - end\n
+      servo - srv/angle(0...180)\n
+      movement - move/type(frw,bck,trn_r,trn_l,stop)/speed(0...255)\n
+      electrolisys - ptpw/status(0,1)\n
+      gps coordinates - gps/latitude(широта)/longitude(долгота)\n
     */
     if(data.equals(0, "srv")) {
       platL.write(180 - data.getInt(1));
@@ -102,17 +120,44 @@ void receive() {
       } else if(data.equals(1, "stop")) {
         motor_stop();
       }
+    } else if(data.equals(0, "ptpw")) {
+      if(data.getInt(1) == 0) {
+        digitalWrite(12, 1);
+      } else if (data.getInt(1) == 1) {
+        digitalWrite(12, 0);
+      }
+    } else if(data.equals(0, "start")) {
+      serial_status = true;
+    } else if(data.equals(0, "end")) {
+      serial_status = false;
+      motor_stop();
+      platL.write(25);
+      platR.write(155);
+      digitalWrite(12, 1);
     }
   }
 }
 
 void send() {
-  
+  /*
+    voltage/current/power
+  */
+  //Serial.println(String(platPower.getVoltage(), 3)  + "/" + String(platPower.getCurrent(), 3) + "/" + String(platPower.getPower(), 3));
+  Serial.print(platPower.getVoltage(), 3);
+  Serial.print("/");
+  Serial.print(platPower.getCurrent(), 3);
+  Serial.print("/");
+  Serial.print(platPower.getPower(), 3);
+  Serial.print(";");
 }
 
 void loop() {
   //Receiving package
   receive();
   //Sending package
-  send();
+  //Average timer on millis()
+  if (millis() - tmr1 >= MY_PERIOD) {
+    tmr1 = millis();
+    send();
+  }
 }
